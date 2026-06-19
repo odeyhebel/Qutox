@@ -21,14 +21,19 @@ else:
     pairs = ['EURUSD=X', 'GBPUSD=X', 'AUDUSD=X', 'USDJPY=X', 'USDCAD=X']
 
     def fetch_real_market_data(ticker):
-        # Soo dejinta xogta 1-daqiiqo ee ugu dambaysay ee suuqa rasmiga ah
-        data = yf.download(tickers=ticker, period='1d', interval='1m')
+        # Waxaan u beddelnay 'period=1d' iyo 'interval=5m' si loo saxo ciladda loona helo 5-minute candles
+        # group_by='ticker' iyo auto_adjust waxay caawinayaan in xogta la akhriyi karo
+        data = yf.download(tickers=ticker, period='1d', interval='5m', auto_adjust=True, group_by='ticker')
         return data
 
     def generate_high_accuracy_signal(df):
-        if len(df) < 30:
-            return "Xog ku filan ma jirto"
+        if len(df) < 20:
+            return "⏳ Xog ku filan ma jirto suuqa hadda (Sug 5m)"
         
+        # Sifaynta xogta haddii ay leedahay MultiIndex koofiyad ah
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.droplevel(0)
+            
         # Indicators-ka saxnaanta kor u qaadaya
         df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
         
@@ -51,15 +56,15 @@ else:
         prev_close = float(prev_row['Close'])
         prev_open = float(prev_row['Open'])
         
-        # --- STRATEGY: PRICE ACTION + INDICATORS ---
+        # --- STRATEGY: PRICE ACTION + INDICATORS (5-MINUTE) ---
         # 1. Bullish Reversal at Support / Oversold (CALL)
         is_bullish_pattern = (prev_close < prev_open) and (close_price > open_price) and (close_price >= prev_open)
-        if is_bullish_pattern and rsi_val <= 30 and close_price > ema_val:
+        if is_bullish_pattern and rsi_val <= 35 and close_price > ema_val:
             return "🚀 STRONG CALL (Buy)"
             
         # 2. Bearish Reversal at Resistance / Overbought (PUT)
         is_bearish_pattern = (prev_close > prev_open) and (close_price < open_price) and (close_price <= prev_open)
-        if is_bearish_pattern and rsi_val >= 70 and close_price < ema_val:
+        if is_bearish_pattern and rsi_val >= 65 and close_price < ema_val:
             return "📉 STRONG PUT (Sell)"
             
         return "⏳ Sugitaan (No Safe Setup)"
@@ -84,4 +89,5 @@ else:
                     st.caption(f"Price: {round(df['Close'].iloc[-1], 5)}")
                     st.caption(f"RSI: {round(df['RSI'].iloc[-1], 2)}")
                 except Exception as e:
-                    st.error("Cilad baa ku timid soo dejinta xogta.")
+                    # Haddii ay ciladi jirto, waxay inoo tusaysaa fariinta dhabta ah ee cilada si aan u ogaano
+                    st.error(f"Cilad Farsamo: {str(e)[:30]}")
