@@ -113,13 +113,13 @@ def generate_signal(df_5m, df_15m, mode='Balanced'):
     macd_hist = float(last['MACD_HIST'])
     prev_close, prev_open = float(prev['Close']), float(prev['Open'])
 
-    is_bullish_pattern = (prev_close < prev_open) and (close_price > open_price) and (close_price >= prev_open)
-    is_bearish_pattern = (prev_close > prev_open) and (close_price < open_price) and (close_price <= prev_open)
+    is_bullish_pattern = (prev_close < prev_open) and (close_price > open_price)
+    is_bearish_pattern = (prev_close > prev_open) and (close_price < open_price)
 
     trend = get_trend_direction(df_15m)
 
-    call_ok = is_bullish_pattern and rsi_val <= 35 and close_price > ema_val
-    put_ok = is_bearish_pattern and rsi_val >= 65 and close_price < ema_val
+    call_ok = is_bullish_pattern and rsi_val <= 40 and close_price > ema_val
+    put_ok = is_bearish_pattern and rsi_val >= 60 and close_price < ema_val
 
     if mode == 'Strict':
         call_ok = call_ok and macd_hist > 0 and trend == 'up'
