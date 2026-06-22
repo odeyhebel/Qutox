@@ -113,17 +113,14 @@ def generate_signal(df_5m, df_15m, mode='Balanced'):
     macd_hist = float(last['MACD_HIST'])
     prev_close, prev_open = float(prev['Close']), float(prev['Open'])
 
-    is_bullish_pattern = (prev_close < prev_open) and (close_price > open_price)
-    is_bearish_pattern = (prev_close > prev_open) and (close_price < open_price)
-
     trend = get_trend_direction(df_15m)
 
-    call_ok = is_bullish_pattern and rsi_val <= 40 and close_price > ema_val
-    put_ok = is_bearish_pattern and rsi_val >= 60 and close_price < ema_val
+    call_ok = rsi_val < 45 and close_price > ema_val and macd_hist > 0
+    put_ok  = rsi_val > 55 and close_price < ema_val and macd_hist < 0
 
     if mode == 'Strict':
-        call_ok = call_ok and macd_hist > 0 and trend == 'up'
-        put_ok = put_ok and macd_hist < 0 and trend == 'down'
+        call_ok = call_ok and trend == 'up'
+        put_ok  = put_ok  and trend == 'down'
 
     # Confidence score - waxay shaqaysaa labada mode (Balanced iyo Strict)
     # si aad Balanced mode-ka ugu aragto signal-yada ugu adag iyada oo
