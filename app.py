@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import datetime
+import time
 
 # ============================================================
 # UI Setup
@@ -119,7 +120,16 @@ def generate_signal(df_5m, df_15m, mode='Balanced'):
         call_ok = call_ok and macd_hist > 0 and trend == 'up'
         put_ok = put_ok and macd_hist < 0 and trend == 'down'
 
-    info = {'price': close_price, 'rsi': rsi_val, 'trend': trend}
+    # Confidence score - waxay shaqaysaa labada mode (Balanced iyo Strict)
+    # si aad Balanced mode-ka ugu aragto signal-yada ugu adag iyada oo
+    # aanad lumin tirada signal-ka. 2/2 = ugu adag, 0/2 = ugu liita.
+    confidence = None
+    if call_ok or put_ok:
+        macd_aligned = (macd_hist > 0) if call_ok else (macd_hist < 0)
+        trend_aligned = (trend == 'up') if call_ok else (trend == 'down')
+        confidence = int(macd_aligned) + int(trend_aligned)
+
+    info = {'price': close_price, 'rsi': rsi_val, 'trend': trend, 'confidence': confidence}
 
     if call_ok:
         return "🚀 STRONG CALL (Buy)", info
@@ -152,66 +162,137 @@ pairs = {
 
 if 'signal_log' not in st.session_state:
     st.session_state.signal_log = []
+if 'auto_scan' not in st.session_state:
+    st.session_state.auto_scan = False
 
+# ============================================================
+# Controls
+# ============================================================
 col_a, col_b = st.columns([2, 1])
 with col_a:
     mode = st.radio(
         "Mode-ka Signal-ka:", ['Balanced', 'Strict'], horizontal=True,
-        help="Balanced = signals badan, khalad fursaduhu way kor u kacaan. "
-             "Strict = signals yar laakiin MACD + 15m trend confirmation ayaa lagu daraa."
+        help="Balanced = signals badan. Strict = MACD + 15m confirmation lagu daraa."
     )
 with col_b:
     testing_override = st.checkbox("Testing Mode (iska indho-tir saacadaha)")
 
+st.markdown("##### 📰 News Check")
+news_clear = st.checkbox(
+    "Waan hubiyay — ma jiro war dhaqaale culus (NFP, CPI, FOMC, iwm) socda 30 daqiiqo gudahood."
+)
+st.caption("Hubi: forexfactory.com/calendar")
+
 market_open = is_market_open() or testing_override
 
 if market_open:
-    st.success("🟢 Suuqa Rasmiga ah waa furanyahay (ama Testing Mode ayaa shaqaynaya).")
+    st.success("🟢 Suuqa Rasmiga ah waa furanyahay.")
 else:
-    st.error("🚨 Suuqa Rasmiga ah hadda waa xiran yahay! Wuxuu dib u furmi doonaa Axad 21:00 UTC.")
+    st.error("🚨 Suuqu waa xiran yahay! Wuxuu dib u furmi doonaa Axad 21:00 UTC.")
 
-if st.button("Baar Suuqa Rasmiga ah (Scan Real Market)"):
-    if not market_open:
-        st.warning("Suuqu wuu xiran yahay — ma scan gareyn karo hadda. Isticmaal Testing Mode haddii aad rabto inaad imtixaanto.")
+# ============================================================
+# Auto Scan Toggle
+# ============================================================
+col_start, col_stop = st.columns(2)
+with col_start:
+    if st.button("▶️ Bilow Auto Scan", use_container_width=True):
+        if not market_open:
+            st.warning("Suuqu wuu xiran yahay — Testing Mode isticmaal.")
+        elif not news_clear:
+            st.warning("⚠️ News Check hubi marka hore.")
+        else:
+            st.session_state.auto_scan = True
+with col_stop:
+    if st.button("⏹️ Jooji Auto Scan", use_container_width=True):
+        st.session_state.auto_scan = False
+
+# ============================================================
+# Scan Function (la wadaago Manual iyo Auto)
+# ============================================================
+def run_scan(mode):
+    conf_label = {2: "🟢🟢 2/2 (Adag)", 1: "🟡 1/2 (Dhexdhexaad)", 0: "🔴 0/2 (Tartiib)"}
+    found_signals = []
+
+    for ticker, name in pairs.items():
+        try:
+            df_5m  = fetch_real_market_data(ticker, '1d',  '5m')
+            df_15m = fetch_real_market_data(ticker, '5d', '15m')
+            signal, info = generate_signal(df_5m, df_15m, mode)
+            if ("CALL" in signal or "PUT" in signal) and info:
+                found_signals.append((name, signal, info))
+                # Log (duplicate check: same asset + signal in last 5 mins)
+                now_str = datetime.datetime.now().strftime('%H:%M:%S')
+                duplicate = any(
+                    r['Asset'] == name and r['Signal'] == signal
+                    for r in st.session_state.signal_log[-20:]
+                )
+                if not duplicate:
+                    st.session_state.signal_log.append({
+                        'Waqti'     : now_str,
+                        'Asset'     : name,
+                        'Signal'    : signal,
+                        'Price'     : round(info['price'], 5),
+                        'Confidence': conf_label.get(info['confidence'], 'N/A'),
+                    })
+        except Exception:
+            pass
+
+    # Soo bandhig kaliya signals-ka — haddii aanay jirin, fariin gaaban
+    st.markdown(f"**🕐 Scan la dhammeeyay: {datetime.datetime.now().strftime('%H:%M:%S')}**")
+    if found_signals:
+        for name, signal, info in found_signals:
+            with st.container():
+                if "CALL" in signal:
+                    st.success(f"**{name}** — {signal}")
+                else:
+                    st.error(f"**{name}** — {signal}")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.caption(f"Price: {round(info['price'], 5)}")
+                c2.caption(f"RSI: {round(info['rsi'], 2)}")
+                c3.caption(f"15m Trend: {info['trend'] or 'N/A'}")
+                c4.caption(f"Confidence: {conf_label.get(info['confidence'], 'N/A')}")
     else:
-        cols = st.columns(len(pairs))
-        for i, (ticker, name) in enumerate(pairs.items()):
-            with cols[i]:
-                st.markdown(f"**{name}**")
-                try:
-                    df_5m = fetch_real_market_data(ticker, '1d', '5m')
-                    df_15m = fetch_real_market_data(ticker, '5d', '15m')
-                    signal, info = generate_signal(df_5m, df_15m, mode)
+        st.info("⏳ Hadda ma jiro signal — bot-ku wuu sii eegayaa...")
 
-                    if "CALL" in signal:
-                        st.success(signal)
-                    elif "PUT" in signal:
-                        st.error(signal)
-                    else:
-                        st.warning(signal)
+    # Signal Log
+    if st.session_state.signal_log:
+        st.markdown("---")
+        st.subheader("📋 Taariikhda Signals-ka")
+        st.dataframe(
+            pd.DataFrame(st.session_state.signal_log[::-1]),
+            use_container_width=True
+        )
 
-                    if info:
-                        st.caption(f"Price: {round(info['price'], 5)}")
-                        st.caption(f"RSI: {round(info['rsi'], 2)}")
-                        st.caption(f"15m Trend: {info['trend'] or 'N/A'}")
+# ============================================================
+# Manual Scan button (haddii Auto Scan xiran yahay)
+# ============================================================
+if not st.session_state.auto_scan:
+    if st.button("🔍 Hal mar Scan (Manual)", use_container_width=True):
+        if not market_open:
+            st.warning("Suuqu wuu xiran yahay.")
+        elif not news_clear:
+            st.warning("⚠️ News Check hubi marka hore.")
+        else:
+            run_scan(mode)
 
-                    if "CALL" in signal or "PUT" in signal:
-                        st.session_state.signal_log.append({
-                            'Waqti': datetime.datetime.now().strftime('%H:%M:%S'),
-                            'Asset': name,
-                            'Signal': signal,
-                            'Price': round(info['price'], 5) if info else None,
-                        })
-                except Exception as e:
-                    st.error(f"Cilad Farsamo: {str(e)[:60]}")
-
-        if st.session_state.signal_log:
-            st.subheader("📋 Taariikhda Signals-ka (Session-kan)")
-            st.dataframe(pd.DataFrame(st.session_state.signal_log[::-1]), use_container_width=True)
+# ============================================================
+# Auto Scan Loop — 1 second refresh
+# ============================================================
+if st.session_state.auto_scan:
+    if not market_open:
+        st.warning("Suuqu wuu xiran yahay — Auto Scan waa la joojiyay.")
+        st.session_state.auto_scan = False
+    elif not news_clear:
+        st.warning("⚠️ News Check hubi marka hore — Auto Scan waa la joojiyay.")
+        st.session_state.auto_scan = False
+    else:
+        st.info("🔄 Auto Scan waa shaqaynaya — wuxuu is-cusbooneysiin doonaa 1 second kasta.")
+        run_scan(mode)
+        time.sleep(1)
+        st.rerun()
 
 st.divider()
 st.caption(
-    "⚠️ Risk Management: Ha isticmaalin Martingale. Stake joogto ah isticmaal "
-    "(ugu badnaan 2-5% lacagtaada maalinlaha ah). Marka hore demo ku tijaabi "
-    "ilaa aad ka hubto win-rate dhabta ah, kadibna gudbi real money."
-    )
+    "⚠️ Risk Management: Ha isticmaalin Martingale. 1% kaliya maalinlaha ah. "
+    "Demo ku tijaabi marka hore."
+)
