@@ -5,6 +5,11 @@ import yfinance as yf
 import datetime
 import time
 
+# Saacadda Soomaaliya (EAT = UTC+3)
+EAT = datetime.timezone(datetime.timedelta(hours=3))
+def now_eat():
+    return datetime.datetime.now(EAT)
+
 # ============================================================
 # UI Setup
 # ============================================================
@@ -221,7 +226,7 @@ def run_scan(mode):
             if ("CALL" in signal or "PUT" in signal) and info:
                 found_signals.append((name, signal, info))
                 # Log (duplicate check: same asset + signal in last 5 mins)
-                now_str = datetime.datetime.now().strftime('%H:%M:%S')
+                now_str = now_eat().strftime('%H:%M:%S')
                 duplicate = any(
                     r['Asset'] == name and r['Signal'] == signal
                     for r in st.session_state.signal_log[-20:]
@@ -238,7 +243,7 @@ def run_scan(mode):
             pass
 
     # Soo bandhig kaliya signals-ka — haddii aanay jirin, fariin gaaban
-    st.markdown(f"**🕐 Scan la dhammeeyay: {datetime.datetime.now().strftime('%H:%M:%S')}**")
+    st.markdown(f"**🕐 Scan la dhammeeyay: {now_eat().strftime('%H:%M:%S')} (EAT)**")
     if found_signals:
         for name, signal, info in found_signals:
             with st.container():
