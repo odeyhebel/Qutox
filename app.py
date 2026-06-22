@@ -115,12 +115,16 @@ def generate_signal(df_5m, df_15m, mode='Balanced'):
 
     trend = get_trend_direction(df_15m)
 
-    call_ok = rsi_val < 45 and close_price > ema_val and macd_hist > 0
-    put_ok  = rsi_val > 55 and close_price < ema_val and macd_hist < 0
+    # Balanced: RSI + EMA kaliya (fudud, signals badan)
+    # CALL = price above EMA + RSI hoos u dhacaya (momentum down la'aanteed)
+    # PUT  = price below EMA + RSI kor u socota
+    call_ok = close_price > ema_val and rsi_val < 50
+    put_ok  = close_price < ema_val and rsi_val > 50
 
     if mode == 'Strict':
-        call_ok = call_ok and trend == 'up'
-        put_ok  = put_ok  and trend == 'down'
+        # Strict = MACD + 15m trend confirmation lagu daraa
+        call_ok = call_ok and macd_hist > 0 and trend == 'up'
+        put_ok  = put_ok  and macd_hist < 0 and trend == 'down'
 
     # Confidence score - waxay shaqaysaa labada mode (Balanced iyo Strict)
     # si aad Balanced mode-ka ugu aragto signal-yada ugu adag iyada oo
