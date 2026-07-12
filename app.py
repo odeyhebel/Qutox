@@ -1,304 +1,323 @@
-import streamlit as st
-import pandas as pd
+"""
+PROV MAHAD ULTIMATE AI - REAL ML EDITION
+------------------------------------------------------------
+Halkan waa AI run ah - MA AHA simulation.
+- Xogta: Yahoo Finance (real market candles, real market pairs only)
+- Features: RSI, MACD, Bollinger %B, Stochastic, CCI, ADX (dhammaan xisaab dhab ah)
+- Model: RandomForestClassifier, la train gareeyay xog taariikhi ah
+- Backtest: time-series split (ma isticmaalayo shuffle - lookahead bias looma ogola)
+- Natiijada la tuso waa mid DAACAD AH - haddii accuracy-gu hooseeyo, sidaas ayaa la tusayaa.
+
+Sida loo isticmaalo (Pydroid3 / mobile):
+  pip install streamlit yfinance pandas numpy scikit-learn --break-system-packages
+  streamlit run real_ai_forex_model.py
+"""
+
 import numpy as np
-import yfinance as yf
-import datetime
-import time
+import pandas as pd
+import streamlit as st
 
-# Saacadda Soomaaliya (EAT = UTC+3)
-EAT = datetime.timezone(datetime.timedelta(hours=3))
-def now_eat():
-    return datetime.datetime.now(EAT)
+st.set_page_config(page_title="PROV MAHAD - Real AI", layout="wide")
 
-# ============================================================
-# UI Setup
-# ============================================================
-st.set_page_config(page_title="Real Market Scanner", layout="wide")
-st.title("🎯 Real Market Scanner")
-st.subheader("Calaamadaha Suuqa Rasmiga ah | Isniin - Jimco")
-st.caption(
-    "⚠️ Saxnaanta dhabta ah ee qaab-dhismeedkan waa ~70-75%, marmar gaarsiisan "
-    "~78% xaaladaha trend-ku xoogan yahay. Ha ku kalsoonaan 80%+ — nidaam kasta "
-    "oo retail ah lama gaarsiin karo heerkaas si joogto ah."
-)
+# ──────────────────────────────────────────────────────────────
+# 1) INDICATOR CALCULATIONS (real math, no shortcuts)
+# ──────────────────────────────────────────────────────────────
 
-# ============================================================
-# Market Hours (UTC-based, saxan)
-# ============================================================
-def is_market_open():
-    now_utc = datetime.datetime.utcnow()
-    weekday = now_utc.weekday()  # 0=Isniin ... 6=Axad
-    hour = now_utc.hour
-
-    if weekday == 4 and hour >= 21:      # Jimce ka dib 21:00 UTC
-        return False
-    if weekday == 5:                     # Sabti oo dhan
-        return False
-    if weekday == 6 and hour < 21:       # Axad ka hor 21:00 UTC
-        return False
-    return True
-
-# ============================================================
-# Indicators
-# ============================================================
-def compute_rsi(series, period=14):
-    """RSI oo isticmaalaya Wilder's smoothing (sax ka badan simple rolling mean)."""
-    delta = series.diff()
+def calc_rsi(close, period=14):
+    delta = close.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(50)  # 50 = neutral marka aan la xisaabin karin
+    return rsi.fillna(50)
 
 
-def compute_macd(series, fast=12, slow=26, signal=9):
-    ema_fast = series.ewm(span=fast, adjust=False).mean()
-    ema_slow = series.ewm(span=slow, adjust=False).mean()
+def calc_macd(close, fast=12, slow=26, signal=9):
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
     macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    return macd_line - signal_line  # histogram
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist
 
 
-def get_trend_direction(df_htf):
-    """Trend-ka higher-timeframe (15m) ee lagu xaqiijinayo signal-ka 5m."""
-    if df_htf is None or len(df_htf) < 50:
-        return None
-    ema50 = df_htf['Close'].ewm(span=50, adjust=False).mean()
-    return 'up' if float(df_htf['Close'].iloc[-1]) > float(ema50.iloc[-1]) else 'down'
-
-# ============================================================
-# Data Fetching (robust, leh fallback)
-# ============================================================
-def _fetch(ticker, period, interval):
-    try:
-        df = yf.download(
-            tickers=ticker, period=period, interval=interval,
-            auto_adjust=True, group_by='ticker', progress=False
-        )
-        if df is None or df.empty:
-            return None
-        if isinstance(df.columns, pd.MultiIndex):
-            try:
-                df.columns = df.columns.droplevel(0)
-            except Exception:
-                df.columns = df.columns.droplevel(1)
-        return df
-    except Exception:
-        return None
+def calc_bollinger(close, period=20, std_mult=2):
+    sma = close.rolling(period).mean()
+    std = close.rolling(period).std()
+    upper = sma + std_mult * std
+    lower = sma - std_mult * std
+    # %B: 0 = at lower band, 1 = at upper band, 0.5 = at middle
+    percent_b = (close - lower) / (upper - lower).replace(0, np.nan)
+    return percent_b.fillna(0.5)
 
 
-def fetch_real_market_data(ticker, period, interval):
-    df = _fetch(ticker, period, interval)
-    if df is None and ticker == 'XAUUSD=X':
-        df = _fetch('GC=F', period, interval)  # fallback Gold futures ticker
-    return df
+def calc_stochastic(high, low, close, period=14):
+    lowest = low.rolling(period).min()
+    highest = high.rolling(period).max()
+    k = (close - lowest) / (highest - lowest).replace(0, np.nan) * 100
+    return k.fillna(50)
 
-# ============================================================
-# Signal Logic
-# ============================================================
-def generate_signal(df_5m, df_15m, mode='Balanced'):
-    if df_5m is None or len(df_5m) < 30:
-        return "⏳ Xog ku filan ma jirto (Sug 5m)", None
 
-    df = df_5m.copy()
-    df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
-    df['RSI'] = compute_rsi(df['Close'], 14)
-    df['MACD_HIST'] = compute_macd(df['Close'])
+def calc_cci(high, low, close, period=20):
+    tp = (high + low + close) / 3
+    sma = tp.rolling(period).mean()
+    mean_dev = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
+    cci = (tp - sma) / (0.015 * mean_dev.replace(0, np.nan))
+    return cci.fillna(0)
 
-    last, prev = df.iloc[-1], df.iloc[-2]
-    close_price, open_price = float(last['Close']), float(last['Open'])
-    ema_val, rsi_val = float(last['EMA_20']), float(last['RSI'])
-    macd_hist = float(last['MACD_HIST'])
-    prev_close, prev_open = float(prev['Close']), float(prev['Open'])
 
-    trend = get_trend_direction(df_15m)
+def calc_adx(high, low, close, period=14):
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm < 0] = 0
+    plus_dm[(plus_dm - minus_dm) < 0] = 0
+    minus_dm[(minus_dm - plus_dm) < 0] = 0
 
-    # Balanced: RSI + EMA kaliya (fudud, signals badan)
-    # CALL = price above EMA + RSI hoos u dhacaya (momentum down la'aanteed)
-    # PUT  = price below EMA + RSI kor u socota
-    call_ok = close_price > ema_val and rsi_val < 50
-    put_ok  = close_price < ema_val and rsi_val > 50
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-    if mode == 'Strict':
-        # Strict = MACD + 15m trend confirmation lagu daraa
-        call_ok = call_ok and macd_hist > 0 and trend == 'up'
-        put_ok  = put_ok  and macd_hist < 0 and trend == 'down'
+    atr = tr.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1/period, min_periods=period, adjust=False).mean() / atr.replace(0, np.nan))
+    minus_di = 100 * (minus_dm.ewm(alpha=1/period, min_periods=period, adjust=False).mean() / atr.replace(0, np.nan))
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    adx = dx.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    return adx.fillna(0), plus_di.fillna(0), minus_di.fillna(0)
 
-    # Confidence score - waxay shaqaysaa labada mode (Balanced iyo Strict)
-    # si aad Balanced mode-ka ugu aragto signal-yada ugu adag iyada oo
-    # aanad lumin tirada signal-ka. 2/2 = ugu adag, 0/2 = ugu liita.
-    confidence = None
-    if call_ok or put_ok:
-        macd_aligned = (macd_hist > 0) if call_ok else (macd_hist < 0)
-        trend_aligned = (trend == 'up') if call_ok else (trend == 'down')
-        confidence = int(macd_aligned) + int(trend_aligned)
 
-    info = {'price': close_price, 'rsi': rsi_val, 'trend': trend, 'confidence': confidence}
+# ──────────────────────────────────────────────────────────────
+# 2) DATA FETCH (real market data only - no OTC, no simulation)
+# ──────────────────────────────────────────────────────────────
 
-    if call_ok:
-        return "🚀 STRONG CALL (Buy)", info
-    elif put_ok:
-        return "📉 STRONG PUT (Sell)", info
-    return "⏳ Sugitaan (No Safe Setup)", info
-
-# ============================================================
-# Main App
-# ============================================================
-pairs = {
-    'EURUSD=X': 'EUR/USD',
-    'GBPUSD=X': 'GBP/USD',
-    'AUDUSD=X': 'AUD/USD',
-    'USDJPY=X': 'USD/JPY',
-    'USDCAD=X': 'USD/CAD',
-    'XAUUSD=X': 'XAU/USD (Gold)',
-    'EURCAD=X': 'EUR/CAD',
-    'EURCHF=X': 'EUR/CHF',
-    'USDCHF=X': 'USD/CHF',
-    'AUDCAD=X': 'AUD/CAD',
-    'AUDJPY=X': 'AUD/JPY',
-    'EURJPY=X': 'EUR/JPY',
-    'AUDCHF=X': 'AUD/CHF',
-    'CADCHF=X': 'CAD/CHF',
-    'CADJPY=X': 'CAD/JPY',
-    'CHFJPY=X': 'CHF/JPY',
-    'EURAUD=X': 'EUR/AUD',
+PAIRS = {
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "USD/JPY": "USDJPY=X",
+    "AUD/USD": "AUDUSD=X",
+    "USD/CAD": "USDCAD=X",
+    "USD/CHF": "USDCHF=X",
+    "NZD/USD": "NZDUSD=X",
+    "Gold (XAU/USD)": "GC=F",
+    "Silver (XAG/USD)": "SI=F",
 }
 
-if 'signal_log' not in st.session_state:
-    st.session_state.signal_log = []
-if 'auto_scan' not in st.session_state:
-    st.session_state.auto_scan = False
+# Yahoo Finance limits how far back you can go per interval.
+INTERVAL_PERIOD_MAP = {
+    "5m":  "60d",
+    "15m": "60d",
+    "1h":  "730d",
+    "1d":  "5y",
+}
 
-# ============================================================
-# Controls
-# ============================================================
-col_a, col_b = st.columns([2, 1])
-with col_a:
-    mode = st.radio(
-        "Mode-ka Signal-ka:", ['Balanced', 'Strict'], horizontal=True,
-        help="Balanced = signals badan. Strict = MACD + 15m confirmation lagu daraa."
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_data(ticker, interval):
+    import yfinance as yf
+    period = INTERVAL_PERIOD_MAP.get(interval, "60d")
+    df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df.dropna()
+    return df
+
+
+# ──────────────────────────────────────────────────────────────
+# 3) FEATURE + LABEL BUILDING
+# ──────────────────────────────────────────────────────────────
+
+def build_features(df):
+    out = pd.DataFrame(index=df.index)
+    close, high, low = df["Close"], df["High"], df["Low"]
+
+    out["rsi"] = calc_rsi(close, 14)
+    macd_line, macd_signal, macd_hist = calc_macd(close)
+    out["macd_hist"] = macd_hist
+    out["bb_percent"] = calc_bollinger(close, 20, 2)
+    out["stoch_k"] = calc_stochastic(high, low, close, 14)
+    out["cci"] = calc_cci(high, low, close, 20)
+    adx, plus_di, minus_di = calc_adx(high, low, close, 14)
+    out["adx"] = adx
+    out["di_diff"] = plus_di - minus_di
+    out["return_1"] = close.pct_change(1)
+    out["return_5"] = close.pct_change(5)
+    return out
+
+
+def build_labels(df, horizon):
+    close = df["Close"]
+    future_return = close.shift(-horizon) / close - 1
+    label = (future_return > 0).astype(int)
+    return label, future_return
+
+
+# ──────────────────────────────────────────────────────────────
+# 4) TRAIN + HONEST BACKTEST (time-ordered split, no shuffle)
+# ──────────────────────────────────────────────────────────────
+
+def train_and_evaluate(features, labels, test_size=0.25):
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, confusion_matrix, roc_auc_score
+
+    data = features.copy()
+    data["label"] = labels
+    data = data.dropna()
+
+    split_idx = int(len(data) * (1 - test_size))
+    train, test = data.iloc[:split_idx], data.iloc[split_idx:]
+
+    feat_cols = [c for c in data.columns if c != "label"]
+    X_train, y_train = train[feat_cols], train["label"]
+    X_test, y_test = test[feat_cols], test["label"]
+
+    model = RandomForestClassifier(
+        n_estimators=300, max_depth=5, min_samples_leaf=25,
+        random_state=42, n_jobs=-1
     )
-with col_b:
-    testing_override = st.checkbox("Testing Mode (iska indho-tir saacadaha)")
+    model.fit(X_train, y_train)
 
-st.markdown("##### 📰 News Check")
-news_clear = st.checkbox(
-    "Waan hubiyay — ma jiro war dhaqaale culus (NFP, CPI, FOMC, iwm) socda 30 daqiiqo gudahood."
+    proba_test = model.predict_proba(X_test)[:, 1]
+    pred_test = (proba_test >= 0.5).astype(int)
+
+    metrics = {
+        "n_train": len(train),
+        "n_test": len(test),
+        "accuracy": accuracy_score(y_test, pred_test),
+        "precision": precision_score(y_test, pred_test, zero_division=0),
+        "recall": recall_score(y_test, pred_test, zero_division=0),
+        "confusion_matrix": confusion_matrix(y_test, pred_test),
+    }
+    try:
+        metrics["roc_auc"] = roc_auc_score(y_test, proba_test)
+    except ValueError:
+        metrics["roc_auc"] = float("nan")
+
+    return model, feat_cols, X_test, y_test, proba_test, metrics
+
+
+def accuracy_by_confidence(y_test, proba_test, thresholds):
+    rows = []
+    for t in thresholds:
+        buy_mask = proba_test >= t
+        sell_mask = proba_test <= (1 - t)
+        mask = buy_mask | sell_mask
+        n = mask.sum()
+        if n == 0:
+            rows.append({"threshold": t, "trades_taken": 0, "accuracy": np.nan, "pct_of_data": 0})
+            continue
+        pred = np.where(buy_mask[mask], 1, 0)
+        actual = y_test[mask].values
+        acc = (pred == actual).mean()
+        rows.append({
+            "threshold": t,
+            "trades_taken": int(n),
+            "accuracy": round(acc * 100, 1),
+            "pct_of_data": round(n / len(y_test) * 100, 1),
+        })
+    return pd.DataFrame(rows)
+
+
+# ──────────────────────────────────────────────────────────────
+# 5) STREAMLIT UI
+# ──────────────────────────────────────────────────────────────
+
+st.title("🔬 PROV MAHAD ULTIMATE AI — Real ML Edition")
+st.caption(
+    "AI-kan wuxuu isticmaalaa xog dhab ah oo Yahoo Finance ah, ma isticmaalayo simulation. "
+    "Accuracy-ga la tuso waa mid daacad ah — haddii uu hooseeyo, sidaas ayaa la tusayaa."
 )
-st.caption("Hubi: forexfactory.com/calendar")
 
-market_open = is_market_open() or testing_override
+with st.sidebar:
+    st.header("⚙️ Settings")
+    pair_name = st.selectbox("Trading pair (real market only)", list(PAIRS.keys()))
+    interval = st.selectbox("Candle interval", ["15m", "1h", "1d", "5m"], index=0)
+    horizon = st.slider("Predict N candles ahead", 1, 10, 5)
+    test_size = st.slider("Test set size (%)", 10, 40, 25) / 100
+    train_btn = st.button("🚀 Train & Backtest (real data)")
 
-if market_open:
-    st.success("🟢 Suuqa Rasmiga ah waa furanyahay.")
-else:
-    st.error("🚨 Suuqu waa xiran yahay! Wuxuu dib u furmi doonaa Axad 21:00 UTC.")
-
-# ============================================================
-# Auto Scan Toggle
-# ============================================================
-col_start, col_stop = st.columns(2)
-with col_start:
-    if st.button("▶️ Bilow Auto Scan", use_container_width=True):
-        if not market_open:
-            st.warning("Suuqu wuu xiran yahay — Testing Mode isticmaal.")
-        elif not news_clear:
-            st.warning("⚠️ News Check hubi marka hore.")
-        else:
-            st.session_state.auto_scan = True
-with col_stop:
-    if st.button("⏹️ Jooji Auto Scan", use_container_width=True):
-        st.session_state.auto_scan = False
-
-# ============================================================
-# Scan Function (la wadaago Manual iyo Auto)
-# ============================================================
-def run_scan(mode):
-    conf_label = {2: "🟢🟢 2/2 (Adag)", 1: "🟡 1/2 (Dhexdhexaad)", 0: "🔴 0/2 (Tartiib)"}
-    found_signals = []
-
-    for ticker, name in pairs.items():
+if train_btn:
+    with st.spinner("Soo qaadaya xog dhab ah oo Yahoo Finance ah..."):
         try:
-            df_5m  = fetch_real_market_data(ticker, '1d',  '5m')
-            df_15m = fetch_real_market_data(ticker, '5d', '15m')
-            signal, info = generate_signal(df_5m, df_15m, mode)
-            if ("CALL" in signal or "PUT" in signal) and info:
-                found_signals.append((name, signal, info))
-                # Log (duplicate check: same asset + signal in last 5 mins)
-                now_str = now_eat().strftime('%H:%M:%S')
-                duplicate = any(
-                    r['Asset'] == name and r['Signal'] == signal
-                    for r in st.session_state.signal_log[-20:]
-                )
-                if not duplicate:
-                    st.session_state.signal_log.append({
-                        'Waqti'     : now_str,
-                        'Asset'     : name,
-                        'Signal'    : signal,
-                        'Price'     : round(info['price'], 5),
-                        'Confidence': conf_label.get(info['confidence'], 'N/A'),
-                    })
-        except Exception:
-            pass
+            raw = fetch_data(PAIRS[pair_name], interval)
+        except Exception as e:
+            st.error(f"Xogta lama helin: {e}")
+            st.stop()
 
-    # Soo bandhig kaliya signals-ka — haddii aanay jirin, fariin gaaban
-    st.markdown(f"**🕐 Scan la dhammeeyay: {now_eat().strftime('%H:%M:%S')} (EAT)**")
-    if found_signals:
-        for name, signal, info in found_signals:
-            with st.container():
-                if "CALL" in signal:
-                    st.success(f"**{name}** — {signal}")
-                else:
-                    st.error(f"**{name}** — {signal}")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.caption(f"Price: {round(info['price'], 5)}")
-                c2.caption(f"RSI: {round(info['rsi'], 2)}")
-                c3.caption(f"15m Trend: {info['trend'] or 'N/A'}")
-                c4.caption(f"Confidence: {conf_label.get(info['confidence'], 'N/A')}")
-    else:
-        st.info("⏳ Hadda ma jiro signal — bot-ku wuu sii eegayaa...")
+    if raw.empty or len(raw) < 200:
+        st.error(
+            "Xog kuma filna si model-ka loo tababaro (waxaad u baahan tahay ugu yaraan 200 candle). "
+            "Isku day interval kale (tusaale 1h ama 1d)."
+        )
+        st.stop()
 
-    # Signal Log
-    if st.session_state.signal_log:
-        st.markdown("---")
-        st.subheader("📋 Taariikhda Signals-ka")
-        st.dataframe(
-            pd.DataFrame(st.session_state.signal_log[::-1]),
-            use_container_width=True
+    st.success(f"{len(raw)} candle oo dhab ah ayaa la soo qaaday ({pair_name}, {interval}).")
+
+    feats = build_features(raw)
+    labels, future_ret = build_labels(raw, horizon)
+
+    with st.spinner("Model-ka waa la tababarayaa..."):
+        model, feat_cols, X_test, y_test, proba_test, metrics = train_and_evaluate(
+            feats, labels, test_size
         )
 
-# ============================================================
-# Manual Scan button (haddii Auto Scan xiran yahay)
-# ============================================================
-if not st.session_state.auto_scan:
-    if st.button("🔍 Hal mar Scan (Manual)", use_container_width=True):
-        if not market_open:
-            st.warning("Suuqu wuu xiran yahay.")
-        elif not news_clear:
-            st.warning("⚠️ News Check hubi marka hore.")
-        else:
-            run_scan(mode)
+    st.subheader("📊 Natiijada Backtest (daacad ah — xog aan la tababarin)")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Accuracy", f"{metrics['accuracy']*100:.1f}%")
+    c2.metric("Precision (BUY)", f"{metrics['precision']*100:.1f}%")
+    c3.metric("Recall (BUY)", f"{metrics['recall']*100:.1f}%")
+    c4.metric("ROC-AUC", f"{metrics['roc_auc']:.3f}" if not np.isnan(metrics['roc_auc']) else "N/A")
 
-# ============================================================
-# Auto Scan Loop — 1 second refresh
-# ============================================================
-if st.session_state.auto_scan:
-    if not market_open:
-        st.warning("Suuqu wuu xiran yahay — Auto Scan waa la joojiyay.")
-        st.session_state.auto_scan = False
-    elif not news_clear:
-        st.warning("⚠️ News Check hubi marka hore — Auto Scan waa la joojiyay.")
-        st.session_state.auto_scan = False
+    st.caption(
+        f"Train candles: {metrics['n_train']} | Test candles: {metrics['n_test']} "
+        "(test set-ku waa xog aan model-ku waligiis arag inta la tababarayay)."
+    )
+
+    if metrics["accuracy"] < 0.55:
+        st.warning(
+            "⚠️ Accuracy-gani wuxuu u dhow yahay 50% (coin-flip). Tani waa caadi — suuqu waa mid "
+            "aad noise u badan, oo indicator/ML kaligiis inta badan kuma filna. Ha isticmaalin natiijadan "
+            "sida signal la isku halayn karo."
+        )
+    elif metrics["accuracy"] < 0.60:
+        st.info("ℹ️ Accuracy-gani waa xoogaa ka sarreeya coin-flip — waa edge yar, ma aha wax lagu kalsoon karo lacag badan.")
     else:
-        st.info("🔄 Auto Scan waa shaqaynaya — wuxuu is-cusbooneysiin doonaa 1 second kasta.")
-        run_scan(mode)
-        time.sleep(1)
-        st.rerun()
+        st.success("Accuracy-gani wuu wanaagsan yahay marka la barbardhigo caadiga suuqa — weli ha isticmaalin risk management la'aan.")
 
-st.divider()
-st.caption(
-    "⚠️ Risk Management: Ha isticmaalin Martingale. 1% kaliya maalinlaha ah. "
-    "Demo ku tijaabi marka hore."
-)
+    st.subheader("🎯 Accuracy sida uu u kala duwan yahay Confidence Threshold")
+    st.caption(
+        "Xaqiiqda: haddii aad kaliya qaadato trade-yada AI-gu leeyahay confidence sare, "
+        "tirada trade-yadu way yaraanaysaa, laakiin accuracy-gu wuu kordhi karaa. Miiskan ayaa ku tusaya taas run ahaan."
+    )
+    thresh_df = accuracy_by_confidence(y_test.reset_index(drop=True), proba_test, [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8])
+    st.dataframe(thresh_df, use_container_width=True)
+
+    st.subheader("🧩 Feature Importance (kee indicator ayaa model-ka ugu saameynta badan)")
+    importance = pd.Series(model.feature_importances_, index=feat_cols).sort_values(ascending=False)
+    st.bar_chart(importance)
+
+    st.subheader("🔮 Live Signal (xogta ugu dambeysay)")
+    latest_feats = feats.dropna().iloc[[-1]]
+    latest_price = raw["Close"].iloc[-1]
+    if not latest_feats.empty:
+        latest_proba = model.predict_proba(latest_feats[feat_cols])[0, 1]
+        sig = "BUY" if latest_proba >= 0.5 else "SELL"
+        conf = latest_proba if sig == "BUY" else 1 - latest_proba
+        col1, col2 = st.columns(2)
+        col1.metric("Signal", sig)
+        col2.metric("Model confidence", f"{conf*100:.1f}%")
+        st.caption(f"Last close: {latest_price:.5f} | {pair_name} | {interval} candles")
+        if conf < 0.6:
+            st.warning("Confidence-gani hooseeya — miiska sare ee threshold eeg si aad u ogaato in accuracy-gu ku filan yahay heerkan.")
+
+    st.divider()
+    st.caption(
+        "⚠️ Disclaimer daacad ah: Natiijadan waa backtest ku salaysan taariikhda. Suuqu wuu isbeddelaa "
+        "(market regime change), backtest sare ma dammaanad qaadayo natiijo la mid ah mustaqbalka. "
+        "Marna ha isticmaalin lacag aadan awoodin inaad lumiso. Demo account ku tijaabi ugu yaraan "
+        "50-100 trade ka hor intaadan lacag dhab ah isticmaalin."
+    )
+else:
+    st.info("Dooro pair iyo interval bidix (sidebar), kadibna riix '🚀 Train & Backtest (real data)'.")
