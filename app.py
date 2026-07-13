@@ -70,7 +70,7 @@ def calc_adx(high, low, close, period=14):
     return adx.fillna(0), plus_di.fillna(0), minus_di.fillna(0)
 
 # ──────────────────────────────────────────────────────────────
-# 2) DATA FETCH (17 PAIRS UPDATED)
+# 2) DATA FETCH
 # ──────────────────────────────────────────────────────────────
 
 PAIRS = {
@@ -229,7 +229,7 @@ def accuracy_by_confidence(y_test, proba_test, thresholds):
 st.title("🔬 PROV MAHAD AUTO AI")
 st.caption("Koodkani waa Auto-Pilot — Liiska Pairs-kana si buuxda ayaa loo cusbooneysiiyay.")
 
-with St.sidebar:
+with st.sidebar:
     st.header("⚙️ Doorashada")
     pair_name = st.selectbox("1. Dooro Lacagta (Pair)", list(PAIRS.keys()))
     interval = st.selectbox("2. Dooro Waqtiga (Timeframe)", ["3m", "5m", "15m", "1h"], index=0)
