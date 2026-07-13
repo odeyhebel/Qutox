@@ -13,11 +13,15 @@ Sida loo isticmaalo (Pydroid3 / mobile):
   streamlit run real_ai_forex_model.py
 """
 
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="PROV MAHAD - Real AI", layout="wide")
+st.set_page_config(page_title="PROV MAHAD - Real AI", layout="wide", initial_sidebar_state="collapsed")
 
 # ──────────────────────────────────────────────────────────────
 # 1) INDICATOR CALCULATIONS (real math, no shortcuts)
@@ -107,22 +111,46 @@ PAIRS = {
 
 # Yahoo Finance limits how far back you can go per interval.
 INTERVAL_PERIOD_MAP = {
+    "1m":  "7d",
+    "2m":  "60d",
     "5m":  "60d",
     "15m": "60d",
     "1h":  "730d",
     "1d":  "5y",
 }
 
+# Yahoo Finance does NOT provide a native 3-minute candle (only 1m, 2m, 5m, 15m...).
+# So "3m" is built honestly by resampling real 1-minute candles into 3-minute bars.
+RESAMPLE_INTERVALS = {
+    "3m": ("1m", "3min"),
+}
 
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_data(ticker, interval):
+
+def _download_raw(ticker, interval, period):
     import yfinance as yf
-    period = INTERVAL_PERIOD_MAP.get(interval, "60d")
     df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    df = df.dropna()
-    return df
+    return df.dropna()
+
+
+def _resample_ohlc(df, rule):
+    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
+    if "Volume" in df.columns:
+        agg["Volume"] = "sum"
+    out = df.resample(rule).agg(agg)
+    return out.dropna()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_data(ticker, interval):
+    if interval in RESAMPLE_INTERVALS:
+        base_interval, rule = RESAMPLE_INTERVALS[interval]
+        base_period = INTERVAL_PERIOD_MAP.get(base_interval, "7d")
+        raw = _download_raw(ticker, base_interval, base_period)
+        return _resample_ohlc(raw, rule)
+    period = INTERVAL_PERIOD_MAP.get(interval, "60d")
+    return _download_raw(ticker, interval, period)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -174,8 +202,8 @@ def train_and_evaluate(features, labels, test_size=0.25):
     X_test, y_test = test[feat_cols], test["label"]
 
     model = RandomForestClassifier(
-        n_estimators=300, max_depth=5, min_samples_leaf=25,
-        random_state=42, n_jobs=-1
+        n_estimators=150, max_depth=5, min_samples_leaf=25,
+        random_state=42, n_jobs=1
     )
     model.fit(X_train, y_train)
 
@@ -233,7 +261,14 @@ st.caption(
 with st.sidebar:
     st.header("⚙️ Settings")
     pair_name = st.selectbox("Trading pair (real market only)", list(PAIRS.keys()))
-    interval = st.selectbox("Candle interval", ["15m", "1h", "1d", "5m"], index=0)
+    interval = st.selectbox("Candle interval", ["1m", "2m", "3m", "5m", "15m", "1h", "1d"], index=4)
+    if interval in ("1m", "2m", "3m"):
+        st.caption(
+            "⚠️ 1m/2m/3m: Yahoo Finance kaliya wuxuu haystaa **7-60 maalmood** oo taariikhi ah "
+            "candle-yadan ah - xogtu way ka yar tahay 5m/15m, sidaa darteed model-ku wuu ka "
+            "aad u xasaasi (noisy) natiijadu. 3m si dhab ah ayaa looga dhisay 1m candles la isku dara; "
+            "2m waa candle dhab ah oo Yahoo ku bixiso."
+        )
     horizon = st.slider("Predict N candles ahead", 1, 10, 5)
     test_size = st.slider("Test set size (%)", 10, 40, 25) / 100
     train_btn = st.button("🚀 Train & Backtest (real data)")
