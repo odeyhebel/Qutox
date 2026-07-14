@@ -57,6 +57,10 @@ def calc_adx(high, low, close, period=14):
     plus_dm[plus_dm < 0] = 0
     minus_dm[minus_dm < 0] = 0
 
+    # Wilder's Formula DM-Correction (Claude's Catch)
+    plus_dm[(plus_dm - minus_dm) < 0] = 0
+    minus_dm[(minus_dm - plus_dm) < 0] = 0
+
     tr1 = high - low
     tr2 = (high - close.shift()).abs()
     tr3 = (low - close.shift()).abs()
@@ -133,7 +137,7 @@ def fetch_data(ticker, interval):
         df = _download_raw(ticker, interval, period)
         
     if len(df) > 2:
-        df = df.iloc[:-1] # Tuur kandalka aan xirmin
+        df = df.iloc[:-1] # Tuur kandalka aan xirmin (Gemini Fix)
     return df
 
 # ──────────────────────────────────────────────────────────────
@@ -227,7 +231,7 @@ def accuracy_by_confidence(y_test, proba_test, thresholds):
 # ──────────────────────────────────────────────────────────────
 
 st.title("🔬 PROV MAHAD AUTO AI")
-st.caption("Koodkani waa Auto-Pilot — Liiska Pairs-kana si buuxda ayaa loo cusbooneysiiyay.")
+st.caption("Auto-Pilot & Advanced Features (ADX Bug Fixed)")
 
 with st.sidebar:
     st.header("⚙️ Doorashada")
@@ -235,7 +239,21 @@ with st.sidebar:
     interval = st.selectbox("2. Dooro Waqtiga (Timeframe)", ["3m", "5m", "15m", "1h"], index=0)
     
     st.write("---")
+    st.subheader("🛠️ Advanced Settings")
+    # Dib u soo celinta sliders-ka sidii uu Claude ku taliyay
+    predict_horizon = st.slider("Predict Horizon (N)", min_value=1, max_value=5, value=1, step=1, help="Kandallada xiga ee la saadaalinayo.")
+    test_size_pct = st.slider("Test Size (%)", min_value=10, max_value=50, value=25, step=5, help="Boqolleyda loo qoondeeyay tijaabada.") / 100.0
+    
+    st.write("---")
     train_btn = st.button("🚀 GET SIGNAL & BACKTEST")
+    
+    st.write("---")
+    st.subheader("💡 Digniin Muhiim Ah")
+    st.info("""
+    * **Demo-Test**: Ku tijaabi ugu yaraan 50-100 trades oo demo ah.
+    * **Market Regime**: Suuqu isbeddel joogto ah ayuu leeyahay.
+    * **Maareynta Khatarta**: Ha gelin lacag aadan awoodin inaad lumiso.
+    """)
 
 if train_btn:
     with st.spinner("Xogta suuqa ayaa la falanqaynayaa..."):
@@ -250,9 +268,9 @@ if train_btn:
         st.stop()
 
     feats = build_features(raw)
-    labels, future_ret = build_labels(raw, horizon=1) 
+    labels, future_ret = build_labels(raw, horizon=predict_horizon) 
 
-    model, feat_cols, X_test, y_test, proba_test, metrics = train_and_evaluate(feats, labels, test_size=0.25)
+    model, feat_cols, X_test, y_test, proba_test, metrics = train_and_evaluate(feats, labels, test_size=test_size_pct)
 
     # 1. LIVE SIGNAL BOX
     st.subheader("🔮 LIVE SIGNAL (Kandalka xiga ee dhalanaya)")
@@ -269,14 +287,27 @@ if train_btn:
         col2.metric("🎯 CONFIDENCE", f"{conf*100:.1f}%")
         col3.metric("💰 QIIMAHA HADA", f"{latest_price:.5f}")
         
-        if conf < 0.70:
-            st.warning("⚠️ Digniin: Kalsoonida signal-kan waa ay hoosaysaa (70% ka yar). Ha gelin trade-kan!")
+        # Safe messaging based on validation performance
+        auc = metrics["roc_auc"]
+        if pd.isna(auc) or auc < 0.55:
+            st.error(f"⚠️ **Digniin Halis ah:** Model-ka wuxuu muujinayaa wax-qabad aad u hooseeya (ROC-AUC: {auc:.3f}). Tani waxay u dhowdahay qori-tuur (coin-flip). Ha gelin trade-ka!")
+        elif conf < 0.70:
+            st.warning("⚠️ **Fariin:** Signal-kani kalsooni adag ma haysto (hoos u dhac ka yar 70%). Waxaa fiican in la sugo mid ka adag.")
         else:
-            st.success("🔥 Signal Adag! Diyaarso Broker-ka markuu kandalku xirmo gal.")
+            st.success(f"🚀 **Signal la falanqeeyay:** Kalsoonidu waa mid sareysa ({conf*100:.1f}%), laakiin mar walba isbarbardhig isbeddelka dhabta ah ee suuqa (ROC-AUC: {auc:.3f}).")
 
     st.divider()
 
-    # 2. ACCURACY TABLE
+    # 2. MODEL VALIDATION METRICS
+    st.subheader("📊 Tayada Model-ka ee Backtesting-ka")
+    col_acc, col_auc, col_prec = st.columns(3)
+    col_acc.metric("🎯 Accuracy Guud", f"{metrics['accuracy']*100:.1f}%")
+    col_auc.metric("📉 ROC-AUC", f"{metrics['roc_auc']:.3f}", help="Haddii ay ka hooseyso 0.50, model-ku ma laha wax ka duwan nasiibka caadiga ah.")
+    col_prec.metric("📈 Precision", f"{metrics['precision']*100:.1f}%")
+
+    st.divider()
+
+    # 3. ACCURACY BY CONFIDENCE TABLE
     st.subheader("🎯 Jadwalka Saxnaanta (Accuracy Table)")
     thresh_df = accuracy_by_confidence(y_test.reset_index(drop=True), proba_test, [0.5, 0.6, 0.7, 0.8])
     if not thresh_df.empty:
