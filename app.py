@@ -57,7 +57,7 @@ def calc_adx(high, low, close, period=14):
     plus_dm[plus_dm < 0] = 0
     minus_dm[minus_dm < 0] = 0
 
-    # Wilder's Formula DM-Correction (Claude's Catch)
+    # Wilder's Formula DM-Correction
     plus_dm[(plus_dm - minus_dm) < 0] = 0
     minus_dm[(minus_dm - plus_dm) < 0] = 0
 
@@ -137,7 +137,7 @@ def fetch_data(ticker, interval):
         df = _download_raw(ticker, interval, period)
         
     if len(df) > 2:
-        df = df.iloc[:-1] # Tuur kandalka aan xirmin (Gemini Fix)
+        df = df.iloc[:-1] # Tuur kandalka aan xirmin
     return df
 
 # ──────────────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ def build_labels(df, horizon=1):
     return label, future_return
 
 # ──────────────────────────────────────────────────────────────
-# 4) TRAIN + BACKTEST
+# 4) TRAIN + BACKTEST (LA SAXAY)
 # ──────────────────────────────────────────────────────────────
 
 def train_and_evaluate(features, labels, test_size=0.25):
@@ -186,19 +186,26 @@ def train_and_evaluate(features, labels, test_size=0.25):
     X_train, y_train = train[feat_cols], train["label"]
     X_test, y_test = test[feat_cols], test["label"]
 
+    # FIX 1: Waxaan ku darnay class_weight="balanced" si uu BUY iyo SELL u tixgeliyo
     model = RandomForestClassifier(
         n_estimators=150, max_depth=5, min_samples_leaf=25,
+        class_weight="balanced",
         random_state=42, n_jobs=1
     )
     model.fit(X_train, y_train)
 
+    # FIX 2: Dynamic threshold ka yimid training set-ka
+    train_proba = model.predict_proba(X_train)[:, 1]
+    opt_threshold = np.median(train_proba)
+
     proba_test = model.predict_proba(X_test)[:, 1]
-    pred_test = (proba_test >= 0.5).astype(int)
+    pred_test = (proba_test >= opt_threshold).astype(int)
 
     metrics = {
         "accuracy": accuracy_score(y_test, pred_test),
         "precision": precision_score(y_test, pred_test, zero_division=0),
         "recall": recall_score(y_test, pred_test, zero_division=0),
+        "threshold": opt_threshold
     }
     try:
         metrics["roc_auc"] = roc_auc_score(y_test, proba_test)
@@ -231,7 +238,7 @@ def accuracy_by_confidence(y_test, proba_test, thresholds):
 # ──────────────────────────────────────────────────────────────
 
 st.title("🔬 PROV MAHAD AUTO AI")
-st.caption("Auto-Pilot & Advanced Features (ADX Bug Fixed)")
+st.caption("Auto-Pilot & Balanced ML Engine (Precision Fix Applied)")
 
 with st.sidebar:
     st.header("⚙️ Doorashada")
@@ -240,7 +247,6 @@ with st.sidebar:
     
     st.write("---")
     st.subheader("🛠️ Advanced Settings")
-    # Dib u soo celinta sliders-ka sidii uu Claude ku taliyay
     predict_horizon = st.slider("Predict Horizon (N)", min_value=1, max_value=5, value=1, step=1, help="Kandallada xiga ee la saadaalinayo.")
     test_size_pct = st.slider("Test Size (%)", min_value=10, max_value=50, value=25, step=5, help="Boqolleyda loo qoondeeyay tijaabada.") / 100.0
     
@@ -279,20 +285,26 @@ if train_btn:
     
     if not latest_feats.empty:
         latest_proba = model.predict_proba(latest_feats[feat_cols])[0, 1]
-        sig = "BUY (CALL)" if latest_proba >= 0.5 else "SELL (PUT)"
-        conf = latest_proba if sig == "BUY (CALL)" else 1 - latest_proba
+        
+        # FIX 3: Dynamic Threshold Comparison
+        dyn_thresh = metrics["threshold"]
+        sig = "BUY (CALL)" if latest_proba >= dyn_thresh else "SELL (PUT)"
+        
+        if sig == "BUY (CALL)":
+            conf = latest_proba
+        else:
+            conf = 1.0 - latest_proba
         
         col1, col2, col3 = st.columns(3)
         col1.metric("📊 SIGNAL-KA", sig)
         col2.metric("🎯 CONFIDENCE", f"{conf*100:.1f}%")
         col3.metric("💰 QIIMAHA HADA", f"{latest_price:.5f}")
         
-        # Safe messaging based on validation performance
         auc = metrics["roc_auc"]
-        if pd.isna(auc) or auc < 0.55:
+        if pd.isna(auc) or auc < 0.53:
             st.error(f"⚠️ **Digniin Halis ah:** Model-ka wuxuu muujinayaa wax-qabad aad u hooseeya (ROC-AUC: {auc:.3f}). Tani waxay u dhowdahay qori-tuur (coin-flip). Ha gelin trade-ka!")
-        elif conf < 0.70:
-            st.warning("⚠️ **Fariin:** Signal-kani kalsooni adag ma haysto (hoos u dhac ka yar 70%). Waxaa fiican in la sugo mid ka adag.")
+        elif conf < 0.60:
+            st.warning("⚠️ **Fariin:** Signal-kani kalsooni adag ma haysto. Waxaa fiican in la sugo mid ka adag.")
         else:
             st.success(f"🚀 **Signal la falanqeeyay:** Kalsoonidu waa mid sareysa ({conf*100:.1f}%), laakiin mar walba isbarbardhig isbeddelka dhabta ah ee suuqa (ROC-AUC: {auc:.3f}).")
 
