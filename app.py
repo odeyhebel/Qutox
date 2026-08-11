@@ -57,7 +57,7 @@ def calc_adx(high, low, close, period=14):
     plus_dm[plus_dm < 0] = 0
     minus_dm[minus_dm < 0] = 0
 
-    # Wilder's Formula DM-Correction
+    # Wilder's Formula DM-Correction (Claude's Catch)
     plus_dm[(plus_dm - minus_dm) < 0] = 0
     minus_dm[(minus_dm - plus_dm) < 0] = 0
 
@@ -78,16 +78,33 @@ def calc_adx(high, low, close, period=14):
 # ──────────────────────────────────────────────────────────────
 
 PAIRS = {
-    "EUR/USD": "EURUSD=X", "EUR/JPY": "EURJPY=X", "EUR/CHF": "EURCHF=X",
-    "EUR/CAD": "EURCAD=X", "EUR/AUD": "EURAUD=X", "AUD/USD": "AUDUSD=X",
-    "AUD/JPY": "AUDJPY=X", "AUD/CHF": "AUDCHF=X", "AUD/CAD": "AUDCAD=X",
-    "CAD/CHF": "CADCHF=X", "CAD/JPY": "CADJPY=X", "CHF/JPY": "CHFJPY=X",
-    "USD/CAD": "USDCAD=X", "USD/CHF": "USDCHF=X", "USD/JPY": "USDJPY=X",
-    "GBP/USD": "GBPUSD=X", "GBP/AUD": "GBPAUD=X"
+    "EUR/USD": "EURUSD=X",
+    "EUR/JPY": "EURJPY=X",
+    "EUR/CHF": "EURCHF=X",
+    "EUR/CAD": "EURCAD=X",
+    "EUR/AUD": "EURAUD=X",
+    "AUD/USD": "AUDUSD=X",
+    "AUD/JPY": "AUDJPY=X",
+    "AUD/CHF": "AUDCHF=X",
+    "AUD/CAD": "AUDCAD=X",
+    "CAD/CHF": "CADCHF=X",
+    "CAD/JPY": "CADJPY=X",
+    "CHF/JPY": "CHFJPY=X",
+    "USD/CAD": "USDCAD=X",
+    "USD/CHF": "USDCHF=X",
+    "USD/JPY": "USDJPY=X",
+    "GBP/USD": "GBPUSD=X",
+    "GBP/AUD": "GBPAUD=X"
 }
 
 INTERVAL_PERIOD_MAP = {
-    "1m": "7d", "2m": "60d", "3m": "7d", "5m": "60d", "15m": "60d", "1h": "730d", "1d": "5y"
+    "1m":  "7d",
+    "2m":  "60d",
+    "3m":  "7d",
+    "5m":  "60d",
+    "15m": "60d",
+    "1h":  "730d",
+    "1d":  "5y",
 }
 
 RESAMPLE_INTERVALS = {
@@ -120,7 +137,7 @@ def fetch_data(ticker, interval):
         df = _download_raw(ticker, interval, period)
         
     if len(df) > 2:
-        df = df.iloc[:-1]
+        df = df.iloc[:-1] # Tuur kandalka aan xirmin (Gemini Fix)
     return df
 
 # ──────────────────────────────────────────────────────────────
@@ -132,7 +149,7 @@ def build_features(df):
     close, high, low = df["Close"], df["High"], df["Low"]
 
     out["rsi"] = calc_rsi(close, 14)
-    _, _, macd_hist = calc_macd(close)
+    macd_line, macd_signal, macd_hist = calc_macd(close)
     out["macd_hist"] = macd_hist
     out["bb_percent"] = calc_bollinger(close, 20, 2)
     out["stoch_k"] = calc_stochastic(high, low, close, 14)
@@ -214,7 +231,7 @@ def accuracy_by_confidence(y_test, proba_test, thresholds):
 # ──────────────────────────────────────────────────────────────
 
 st.title("🔬 PROV MAHAD AUTO AI")
-st.caption("Auto-Pilot & Advanced Features (60% Strict Confidence Filter)")
+st.caption("Auto-Pilot & Advanced Features (ADX Bug Fixed)")
 
 with st.sidebar:
     st.header("⚙️ Doorashada")
@@ -223,11 +240,20 @@ with st.sidebar:
     
     st.write("---")
     st.subheader("🛠️ Advanced Settings")
-    predict_horizon = st.slider("Predict Horizon (N)", min_value=1, max_value=5, value=1, step=1)
-    test_size_pct = st.slider("Test Size (%)", min_value=10, max_value=50, value=25, step=5) / 100.0
+    # Dib u soo celinta sliders-ka sidii uu Claude ku taliyay
+    predict_horizon = st.slider("Predict Horizon (N)", min_value=1, max_value=5, value=1, step=1, help="Kandallada xiga ee la saadaalinayo.")
+    test_size_pct = st.slider("Test Size (%)", min_value=10, max_value=50, value=25, step=5, help="Boqolleyda loo qoondeeyay tijaabada.") / 100.0
     
     st.write("---")
     train_btn = st.button("🚀 GET SIGNAL & BACKTEST")
+    
+    st.write("---")
+    st.subheader("💡 Digniin Muhiim Ah")
+    st.info("""
+    * **Demo-Test**: Ku tijaabi ugu yaraan 50-100 trades oo demo ah.
+    * **Market Regime**: Suuqu isbeddel joogto ah ayuu leeyahay.
+    * **Maareynta Khatarta**: Ha gelin lacag aadan awoodin inaad lumiso.
+    """)
 
 if train_btn:
     with st.spinner("Xogta suuqa ayaa la falanqaynayaa..."):
@@ -242,9 +268,9 @@ if train_btn:
         st.stop()
 
     feats = build_features(raw)
-    labels, _ = build_labels(raw, horizon=predict_horizon) 
+    labels, future_ret = build_labels(raw, horizon=predict_horizon) 
 
-    model, feat_cols, _, y_test, proba_test, metrics = train_and_evaluate(feats, labels, test_size=test_size_pct)
+    model, feat_cols, X_test, y_test, proba_test, metrics = train_and_evaluate(feats, labels, test_size=test_size_pct)
 
     # 1. LIVE SIGNAL BOX
     st.subheader("🔮 LIVE SIGNAL (Kandalka xiga ee dhalanaya)")
@@ -261,15 +287,14 @@ if train_btn:
         col2.metric("🎯 CONFIDENCE", f"{conf*100:.1f}%")
         col3.metric("💰 QIIMAHA HADA", f"{latest_price:.5f}")
         
-        # Xannibaadda adag ee 60% Confidence
-        if conf < 0.60:
-            st.error(f"⛔ **BOT-KU WAA XIRAY SIGNAL-KA:** Kalsoonidu waa {conf*100:.1f}% (Way ka hooseysaa 60%). Wax signal ah laguma taliyo hadda!")
+        # Safe messaging based on validation performance
+        auc = metrics["roc_auc"]
+        if pd.isna(auc) or auc < 0.55:
+            st.error(f"⚠️ **Digniin Halis ah:** Model-ka wuxuu muujinayaa wax-qabad aad u hooseeya (ROC-AUC: {auc:.3f}). Tani waxay u dhowdahay qori-tuur (coin-flip). Ha gelin trade-ka!")
+        elif conf < 0.70:
+            st.warning("⚠️ **Fariin:** Signal-kani kalsooni adag ma haysto (hoos u dhac ka yar 70%). Waxaa fiican in la sugo mid ka adag.")
         else:
-            auc = metrics["roc_auc"]
-            if pd.isna(auc) or auc < 0.55:
-                st.error(f"⚠️ **Digniin Halis ah:** Model-ka wuxuu muujinayaa wax-qabad aad u hooseeya (ROC-AUC: {auc:.3f}). Ha gelin trade-ka!")
-            else:
-                st.success(f"🚀 **FURSAD VVIP:** Jihada **{sig}** waxaa loo helay si sax ah iyadoo kalsoonidu tahay ({conf*100:.1f}%)!")
+            st.success(f"🚀 **Signal la falanqeeyay:** Kalsoonidu waa mid sareysa ({conf*100:.1f}%), laakiin mar walba isbarbardhig isbeddelka dhabta ah ee suuqa (ROC-AUC: {auc:.3f}).")
 
     st.divider()
 
@@ -277,7 +302,7 @@ if train_btn:
     st.subheader("📊 Tayada Model-ka ee Backtesting-ka")
     col_acc, col_auc, col_prec = st.columns(3)
     col_acc.metric("🎯 Accuracy Guud", f"{metrics['accuracy']*100:.1f}%")
-    col_auc.metric("📉 ROC-AUC", f"{metrics['roc_auc']:.3f}")
+    col_auc.metric("📉 ROC-AUC", f"{metrics['roc_auc']:.3f}", help="Haddii ay ka hooseyso 0.50, model-ku ma laha wax ka duwan nasiibka caadiga ah.")
     col_prec.metric("📈 Precision", f"{metrics['precision']*100:.1f}%")
 
     st.divider()
